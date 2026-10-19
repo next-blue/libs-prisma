@@ -5,7 +5,13 @@
   },
   "references": [
     {
+      "path": "../infra/utils/tsconfig.lib.json"
+    },
+    {
       "path": "../infra/testing/tsconfig.lib.json"
+    },
+    {
+      "path": "../infra/kits/tsconfig.lib.json"
     },
     {
       "path": "../infra/definitions/tsconfig.lib.json"
