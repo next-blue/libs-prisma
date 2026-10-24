@@ -63,7 +63,6 @@ export async function generatePrismaClient(options: GenerateOptions): Promise<Ge
       schemaDir,
       prismaConfigPath,
       clientOutputDir,
-      projectRoot,
       useCache,
     },
     async () => {

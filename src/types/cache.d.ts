@@ -38,10 +38,11 @@ export interface WithCacheParams {
   schemaDir: string;
   /** prisma.config.ts 절대 경로 — cache hit dummy result 채울 때 사용 */
   prismaConfigPath: string;
-  /** getClientOutputDir 로 얻은 Prisma Client 생성 output 디렉토리 */
+  /**
+   * getClientOutputDir 로 얻은 Prisma Client 생성 output 디렉토리.
+   * cache manifest 도 이 디렉토리 내부에 함께 저장된다.
+   */
   clientOutputDir: string;
-  /** 프로젝트 루트. 기본값 workspaceRoot */
-  projectRoot?: string;
   /** 캐시 사용 여부 (GenerateOptions.cache option 에서 온다) */
   useCache: boolean;
 }

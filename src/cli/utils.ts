@@ -20,12 +20,10 @@
  *   → types/index.d.ts 의 `SpawnChildProcess = ChildProcess & EventEmitter` 인터섹션으로 해결.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, promises as fsPromises, rmSync, statSync } from 'node:fs';
+import { existsSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { workspaceRoot } from '@nx/devkit';
-
-import { PATH } from '@infra/definitions';
 
 import { PRISMA } from '../constants';
 import type {
@@ -169,45 +167,25 @@ export function getClientOutputDir(
 }
 
 /**
- * Prisma schema cache manifest 를 저장하는 디렉토리 경로를 반환한다.
- *
- * SSoT 경로: `PATH.CACHE.PRISMA/<project_normalized>/<otsName>`
- * - projectRoot 를 `[a-zA-Z0-9_-]` 외 문자는 `_` 로 치환 → 파일명으로 안전하게 사용
- *
- * @param otsName     - Operational Target Schema 인스턴스 이름
- * @param projectRoot - Prisma 설정을 갖는 프로젝트 루트 경로. 기본값 workspaceRoot.
- */
-export function getManifestDir(
-  otsName: PrismaOtsName,
-  projectRoot: string = workspaceRoot,
-): string {
-  const normalized = projectRoot.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return join(PATH.CACHE.PRISMA, normalized, otsName as string);
-}
-
-/**
  * Prisma schema cache manifest JSON 파일의 절대 경로를 반환한다.
  *
- * @param otsName     - Operational Target Schema 인스턴스 이름
- * @param projectRoot - Prisma 설정을 갖는 프로젝트 루트 경로. 기본값 workspaceRoot.
- * @returns `${getManifestDir()}/${PRISMA.CACHE_MANIFEST_FILENAME}`
+ * manifest 는 자신이 설명하는 산출물과 수명을 같이 하도록 **client output 디렉터리 내부**에
+ * 저장한다. 덕분에 output 디렉터리 삭제(= sandbox / nx output 정리)만으로 캐시가 함께
+ * 초기화되고, 별도 cache 루트에 대한 GC 가 필요 없다.
+ *
+ * @param clientOutputDir - {@link getClientOutputDir} 로 resolve 한 Prisma Client output 경로
+ * @returns `${clientOutputDir}/${PRISMA.CACHE_MANIFEST_FILENAME}`
  */
-export function getManifestPath(
-  otsName: PrismaOtsName,
-  projectRoot: string = workspaceRoot,
-): string {
-  return join(getManifestDir(otsName, projectRoot), PRISMA.CACHE_MANIFEST_FILENAME);
+export function getManifestPath(clientOutputDir: string): string {
+  return join(clientOutputDir, PRISMA.CACHE_MANIFEST_FILENAME);
 }
 
 /**
  * Prisma generate 결과물 디렉토리가 "완전하게 생성된 상태"인지 체크한다.
  *
- * 검사 대상 필수 파일 3종:
- *   - `index.js`  (CommonJS / ESM dual build 결과물)
- *   - `index.d.ts`  (타입 정의)
- *   - `package.json`  (Prisma Client 패키지 메타데이터)
+ * 검사 대상 = `PRISMA.OUTPUT_REQUIRED_FILES` SSoT (Prisma 7+ 는 `client.ts` / `models.ts`).
  *
- * 3종 모두 존재하고 size > 0 이어야 true 를 반환한다.
+ * 해당 파일 전부가 존재하고 size > 0 이어야 true 를 반환한다.
  * 캐시 hit 판정 전에 실제 출력물이 깨지지 않았는지 사전 검증할 때 사용한다.
  *
  * @param clientOutputDir - {@link getClientOutputDir} 로 resolve 한 Prisma Client output 경로
@@ -305,11 +283,12 @@ export function validatePrismaProjectLayout(
 }
 
 // ============================================================
-// 🧹 Cleanup — Generated Artifacts 정리 (Client Output + Cache Manifest)
+// 🧹 Cleanup — Generated Artifacts 정리 (Client Output + 내부 Cache Manifest)
 // ============================================================
+
 /**
- * Prisma 가 생성한 아티팩트(generated client output 디렉토리 + 캐시 manifest 파일)를
- * 통째로 삭제하고 깨끗한 상태로 재생성할 준비를 한다.
+ * Prisma 가 생성한 아티팩트(client output 디렉토리)를 통째로 삭제하고
+ * 깨끗한 상태로 재생성할 준비를 한다.
  *
  * ✨ 주요 사용 시나리오 3가지:
  *   1. Prisma 패키지 버전 업그레이드 — 구버전 generated 코드가 잔존하여 import mismatch
@@ -318,13 +297,12 @@ export function validatePrismaProjectLayout(
  *
  * 🔒 Precise Touch 보장 (절대 잘못된 파일 삭제 없음):
  *   - schema 파일 (`.prisma`) 은 **절대 삭제하지 않음**
- *   - 삭제 대상은 **오직** 2가지 뿐
- *       ① `PRISMA_CLIENT_OUTPUT` 디렉토리 (generated client 3종 파일 포함)
- *       ② `PRISMA.CACHE_MANIFEST_FILENAME` manifest 파일
+ *   - 삭제 대상은 **오직** client output 디렉토리 하나
+ *       (cache manifest 는 해당 디렉토리 내부에 함께 저장되므로 통째로 삭제됨)
  *   - 존재하지 않는 경로는 skip 하고 removedPaths 목록에도 넣지 않음 (정직한 보고)
  *   - 기본적으로 `dryRun` 모드를 먼저 사용해서 삭제 대상 경로를 사전 확인 가능
  *
- * @param options — CleanupOptions (otsName 필수 / projectRoot, dryRun, keepManifest 선택)
+ * @param options — CleanupOptions (otsName 필수 / projectRoot, clientOutputDir, dryRun 선택)
  * @returns CleanupResult (otsName, dryRun, removedPaths, errors)
  *
  * @example
@@ -346,45 +324,24 @@ export function validatePrismaProjectLayout(
  * ```
  */
 export async function cleanPrismaArtifacts(options: CleanupOptions): Promise<CleanupResult> {
-  const { otsName, projectRoot = workspaceRoot, dryRun = false, keepManifest = false } = options;
+  const { otsName, projectRoot = workspaceRoot, dryRun = false, clientOutputDir } = options;
 
   const errors: CleanupResult['errors'] = [];
   const removedPaths: string[] = [];
 
-  // --- 삭제 대상 ①: PRISMA_CLIENT_OUTPUT generated client 디렉토리 --------------
-  // OTS 환경변수 주입이 없어도 직접 경로 resolve 가능하도록, 기존 output dir 패턴과
-  // 완전히 동일한 `generated/prisma/<ots>` 경로를 join 으로 구성.
-  const clientOutputDir = join(projectRoot, 'generated', 'prisma', String(otsName));
-  if (existsSync(clientOutputDir)) {
-    // manifest 파일도 같이 지우는 옵션 (clientOutputDir 내부에 저장된 경우도 있으므로 함께 고려)
-    removedPaths.push(clientOutputDir);
+  // 삭제 대상: client output 디렉토리 (+ 그 내부의 cache manifest)
+  // PRISMA_CLIENT_OUTPUT override 로 생성된 output 도 정확히 지우도록 clientOutputDir 를 우선 사용.
+  const targetDir = clientOutputDir ?? getClientOutputDir(otsName, undefined, projectRoot);
+  if (existsSync(targetDir)) {
+    removedPaths.push(targetDir);
     if (!dryRun) {
       try {
-        rmSync(clientOutputDir, { recursive: true, force: true });
+        rmSync(targetDir, { recursive: true, force: true });
       } catch (err) {
         errors.push({
-          path: clientOutputDir,
+          path: targetDir,
           message: err instanceof Error ? err.message : String(err),
         });
-      }
-    }
-  }
-
-  // --- 삭제 대상 ②: 캐시 manifest 파일 (별도 cache 디렉토리에 저장된 케이스) --------
-  if (!keepManifest) {
-    const manifestDir = getManifestDir(otsName, projectRoot);
-    const manifestPath = join(manifestDir, PRISMA.CACHE_MANIFEST_FILENAME);
-    if (existsSync(manifestPath)) {
-      removedPaths.push(manifestPath);
-      if (!dryRun) {
-        try {
-          await fsPromises.rm(manifestPath, { force: true });
-        } catch (err) {
-          errors.push({
-            path: manifestPath,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
       }
     }
   }

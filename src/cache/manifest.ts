@@ -4,8 +4,9 @@
  * @migrated from @infra/runtime/src/generator/prisma/cache.ts (2026-10-07)
  * ------------------------------------------------------------------
  * 캐시 정책 (원래 설계 그대로 유지):
- *   1. 출력 파일 3종 모두 정상 생성 + size > 0 확인 (intact check)
- *   2. `PATH.CACHE.PRISMA/<project>/<ots>/cache-manifest.json` manifest 존재
+ *   1. 출력 필수 파일(PRISMA.OUTPUT_REQUIRED_FILES) 모두 정상 생성 + size > 0 확인 (intact check)
+ *   2. `<clientOutputDir>/.prisma-schema-manifest.json` manifest 존재
+ *      (manifest 는 자신이 설명하는 산출물과 수명을 같이 하도록 output 디렉터리 내부에 저장)
  *   3. manifest.version === PRISMA.CACHE_MANIFEST_VERSION
  *   4. manifest.schemaFiles 의 모든 파일 size / mtimeMs 이 현재 fs 상태와 100% 일치
  *   → 4가지 모두 만족시 heavy work(prisma generate) 를 스킵하고 cache hit 로 간주.
@@ -16,15 +17,12 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { workspaceRoot } from '@nx/devkit';
-
-import { isOutputIntact, getManifestPath } from '../cli/utils';
+import { getManifestPath, isOutputIntact } from '../cli/utils';
 import { PRISMA } from '../constants';
 import type {
   GenerateResult,
   Maybe,
   PrismaCliResult,
-  PrismaOtsName,
   SchemaManifest,
   WithCacheParams,
 } from '../types';
@@ -80,25 +78,18 @@ function _writeManifestAtomic<T>(manifestPath: string, payload: T): void {
  * 4단계 체크를 모두 수행하여 캐시 히트 여부를 반환한다.
  *
  * 체크 순서:
- *   1. `isOutputIntact(clientOutputDir)` — 출력 파일 3종 intact 확인
+ *   1. `isOutputIntact(clientOutputDir)` — 출력 필수 파일 intact 확인
  *   2. manifest 파일 존재 + JSON parse 성공
  *   3. manifest.version === 현재 코드의 VERSION
  *   4. 모든 스키마 파일의 size / mtimeMs 가 manifest 기록과 100% 일치
  *
- * @param projectRoot       - 프로젝트 루트. 기본값 workspaceRoot
- * @param otsName           - Operational Target Schema 인스턴스 이름
  * @param schemaDir         - `getPrismaSchemaDir` 로 resolve 한 schema 디렉토리 경로
  * @param clientOutputDir   - `getClientOutputDir` 로 resolve 한 Prisma Client output 디렉토리
  */
-export function isSchemaCached(
-  otsName: PrismaOtsName,
-  schemaDir: string,
-  clientOutputDir: string,
-  projectRoot: string = workspaceRoot,
-): boolean {
+export function isSchemaCached(schemaDir: string, clientOutputDir: string): boolean {
   if (!isOutputIntact(clientOutputDir)) return false;
 
-  const manifestPath = getManifestPath(otsName, projectRoot);
+  const manifestPath = getManifestPath(clientOutputDir);
   const manifest = _readManifestAtomic<SchemaManifest>(manifestPath);
   if (!manifest) return false;
   if (manifest.version !== PRISMA.CACHE_MANIFEST_VERSION) return false;
@@ -123,15 +114,10 @@ export function isSchemaCached(
  * prisma generate 성공 후 호출하여 현재 schema files 의 핑거프린트를
  * manifest 파일로 원자적 저장한다.
  *
- * @param projectRoot - 프로젝트 루트. 기본값 workspaceRoot
- * @param otsName     - Operational Target Schema 인스턴스 이름
- * @param schemaDir   - Schema 파일이 위치한 디렉토리
+ * @param schemaDir       - Schema 파일이 위치한 디렉토리
+ * @param clientOutputDir - manifest 를 함께 저장할 Prisma Client output 디렉토리
  */
-export function writeManifest(
-  otsName: PrismaOtsName,
-  schemaDir: string,
-  projectRoot: string = workspaceRoot,
-): void {
+export function writeManifest(schemaDir: string, clientOutputDir: string): void {
   const schemaFiles = collectSchemaFiles(schemaDir);
   const manifest: SchemaManifest = {
     version: PRISMA.CACHE_MANIFEST_VERSION,
@@ -139,7 +125,7 @@ export function writeManifest(
     schemaFiles,
     generatedAt: new Date().toISOString(),
   };
-  const manifestPath = getManifestPath(otsName, projectRoot);
+  const manifestPath = getManifestPath(clientOutputDir);
   _writeManifestAtomic(manifestPath, manifest);
 }
 
@@ -156,10 +142,9 @@ export async function withSchemaCache<T extends PrismaCliResult>(
   params: WithCacheParams,
   heavyWork: (ctx: { schemaDir: string; clientOutputDir: string }) => Promise<T>,
 ): Promise<{ hit: boolean; result: GenerateResult }> {
-  const projectRoot = params.projectRoot ?? workspaceRoot;
-  const { otsName, schemaDir, prismaConfigPath, clientOutputDir, useCache } = params;
+  const { schemaDir, prismaConfigPath, clientOutputDir, useCache } = params;
 
-  if (useCache && isSchemaCached(otsName, schemaDir, clientOutputDir, projectRoot)) {
+  if (useCache && isSchemaCached(schemaDir, clientOutputDir)) {
     return {
       hit: true,
       result: {
@@ -178,7 +163,7 @@ export async function withSchemaCache<T extends PrismaCliResult>(
 
   if (result.exitCode === 0) {
     try {
-      writeManifest(otsName, schemaDir, projectRoot);
+      writeManifest(schemaDir, clientOutputDir);
     } catch {
       // manifest write 실패는 generate 자체 결과에는 영향을 주지 않는다.
       // 단순히 다음번에 cache miss 로 한 번 더 실행될 것.

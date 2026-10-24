@@ -1,29 +1,33 @@
 import { relative } from 'node:path';
 
+import {
+  afterEach,
+  beforeEach,
+  debugSnapshot,
+  describe,
+  expect,
+  test,
+  useSandbox,
+  vi,
+} from '@infra/testing';
+
 import * as cliUtils from '../cli/utils';
 import { PRISMA } from '../constants';
 import { collectSchemaFiles, isSchemaCached, writeManifest, withSchemaCache } from './manifest';
 import type { PrismaOtsName } from '../types';
-import { afterEach, beforeEach, debugSnapshot, describe, expect, test, useSandbox, vi } from '@infra/testing';
-
 
 describe.component('manifest cache module', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Config OTS 리터럴 유니온은 satisfies 불가 → test-patterns.md §A-2 공식 예외 ①
   const OTS = 'test-ots' as any as PrismaOtsName;
 
   let sb: ReturnType<typeof useSandbox>;
   let isOutputIntactSpy: ReturnType<typeof vi.spyOn>;
-  let getManifestPathSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     sb = useSandbox();
     sb.reset();
 
     isOutputIntactSpy = vi.spyOn(cliUtils, 'isOutputIntact');
-    getManifestPathSpy = vi
-      .spyOn(cliUtils, 'getManifestPath')
-      .mockImplementation((ots) =>
-        sb.resolve(`mf-${ots satisfies PrismaOtsName}-${PRISMA.CACHE_MANIFEST_FILENAME}`),
-      );
   });
 
   afterEach(() => {
@@ -64,9 +68,9 @@ describe.component('manifest cache module', () => {
     test('GIVEN schema files WHEN writeManifest THEN manifest file created with correct JSON shape and can be parsed', () => {
       sb.writeFile('schema.prisma', 'generator client { provider = "prisma-client-js" }');
 
-      writeManifest(OTS, sb.root, sb.root);
+      writeManifest(sb.root, sb.root);
 
-      const manifestAbs = getManifestPathSpy.mock.results[0]?.value satisfies string;
+      const manifestAbs = cliUtils.getManifestPath(sb.root);
       const manifestRel = relative(sb.root, manifestAbs);
       const raw = sb.readFile(manifestRel, 'utf-8');
       const parsed = JSON.parse(raw);
@@ -79,16 +83,17 @@ describe.component('manifest cache module', () => {
     });
 
     test('GIVEN manifest dir does not exist WHEN writeManifest THEN mkdirs parent dirs (recursive mkdir)', () => {
-      const manifestFilename = `mf-deep-${PRISMA.CACHE_MANIFEST_FILENAME}`;
-      getManifestPathSpy.mockReturnValue(sb.resolve(`deeply/nested/${manifestFilename}`));
+      const deepClientOutputDir = sb.resolve('deeply/nested/client');
+      const manifestRel = relative(sb.root, cliUtils.getManifestPath(deepClientOutputDir));
 
       sb.writeFile('s.prisma', '//empty');
 
-      expect(() => writeManifest(OTS, sb.root, sb.root)).not.toThrow();
-      expect(sb.exists(`deeply/nested/${manifestFilename}`)).toBe(true);
+      expect(sb.exists('deeply/nested/client')).toBe(false);
+      expect(() => writeManifest(sb.root, deepClientOutputDir)).not.toThrow();
+      expect(sb.exists(manifestRel)).toBe(true);
       debugSnapshot({
         manifestCreated: true,
-        expectedPath: `deeply/nested/${manifestFilename}`,
+        expectedPath: manifestRel,
       });
     });
   });
@@ -101,34 +106,33 @@ describe.component('manifest cache module', () => {
       isOutputIntactSpy.mockReturnValue(true);
       sb.writeFile('a.prisma', '// a');
       sb.writeFile('b.prisma', '// b');
-      writeManifest(OTS, sb.root, sb.root);
+      writeManifest(sb.root, sb.root);
     }
 
     test('CASE 1: GIVEN output is NOT intact (missing files) THEN returns false, does not even open manifest', () => {
       warmManifest();
       isOutputIntactSpy.mockReturnValue(false);
 
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(false);
       debugSnapshot(result);
     });
 
     test('CASE 2: GIVEN output intact but no manifest file exists THEN returns false', () => {
       isOutputIntactSpy.mockReturnValue(true);
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(false);
       debugSnapshot(result);
     });
 
     test('CASE 3: GIVEN manifest has wrong version THEN returns false', () => {
       warmManifest();
-      const manifestAbs = getManifestPathSpy.mock.results.at(-1)?.value satisfies string;
-      const manifestRel = relative(sb.root, manifestAbs);
+      const manifestRel = relative(sb.root, cliUtils.getManifestPath(sb.root));
       const broken = JSON.parse(sb.readFile(manifestRel, 'utf-8'));
       broken.version = 999;
       sb.writeFile(manifestRel, JSON.stringify(broken));
 
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(false);
       debugSnapshot(result);
     });
@@ -137,7 +141,7 @@ describe.component('manifest cache module', () => {
       warmManifest();
       sb.writeFile('a.prisma', '// a (modified — longer content)');
 
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(false);
       debugSnapshot(result);
     });
@@ -146,7 +150,7 @@ describe.component('manifest cache module', () => {
       warmManifest();
       sb.writeFile('c.prisma', '// brand new model');
 
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(false);
       debugSnapshot(result);
     });
@@ -154,7 +158,7 @@ describe.component('manifest cache module', () => {
     test('CASE 6 (HAPPY): GIVEN output intact + correct version + fingerprints all match THEN returns true (cache HIT)', () => {
       warmManifest();
 
-      const result = isSchemaCached(OTS, sb.root, sb.root, sb.root);
+      const result = isSchemaCached(sb.root, sb.root);
       expect(result).toBe(true);
       debugSnapshot(result);
     });
@@ -167,7 +171,7 @@ describe.component('manifest cache module', () => {
     test('GIVEN useCache=true AND cache hit THEN heavyWork is NEVER called and returns hit:true with cacheHit=true', async () => {
       isOutputIntactSpy.mockReturnValue(true);
       sb.writeFile('s.prisma', '//');
-      writeManifest(OTS, sb.root, sb.root);
+      writeManifest(sb.root, sb.root);
 
       const heavy = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
 
@@ -177,7 +181,6 @@ describe.component('manifest cache module', () => {
           schemaDir: sb.root,
           prismaConfigPath: sb.resolve('prisma.config.ts'),
           clientOutputDir: sb.root,
-          projectRoot: sb.root,
           useCache: true,
         },
         heavy,
@@ -194,7 +197,7 @@ describe.component('manifest cache module', () => {
     test('GIVEN useCache=false THEN heavyWork is ALWAYS called even if cache would hit (cache bypass)', async () => {
       isOutputIntactSpy.mockReturnValue(true);
       sb.writeFile('s.prisma', '//');
-      writeManifest(OTS, sb.root, sb.root);
+      writeManifest(sb.root, sb.root);
 
       const heavy = vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'generated', stderr: '' });
 
@@ -204,7 +207,6 @@ describe.component('manifest cache module', () => {
           schemaDir: sb.root,
           prismaConfigPath: sb.resolve('prisma.config.ts'),
           clientOutputDir: sb.root,
-          projectRoot: sb.root,
           useCache: false,
         },
         heavy,
@@ -227,7 +229,6 @@ describe.component('manifest cache module', () => {
           schemaDir: sb.root,
           prismaConfigPath: sb.resolve('prisma.config.ts'),
           clientOutputDir: sb.root,
-          projectRoot: sb.root,
           useCache: true,
         },
         heavy,
@@ -256,7 +257,6 @@ describe.component('manifest cache module', () => {
           schemaDir: sb.root,
           prismaConfigPath: sb.resolve('prisma.config.ts'),
           clientOutputDir: sb.root,
-          projectRoot: sb.root,
           useCache: true,
         },
         heavy,
@@ -277,7 +277,6 @@ describe.component('manifest cache module', () => {
           schemaDir: sb.root,
           prismaConfigPath: sb.resolve('prisma.config.ts'),
           clientOutputDir: sb.root,
-          projectRoot: sb.root,
           useCache: true,
         },
         heavy,

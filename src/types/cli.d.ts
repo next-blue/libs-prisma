@@ -57,10 +57,10 @@ export interface PrismaProjectLayoutContext {
 /**
  * `cleanPrismaArtifacts()` 실행 옵션 SSoT.
  * Prisma 버전 업그레이드 / 캐시 corruption / schema 대규모 변경 등
- * "깨끗한 상태로 재생성" 이 필요할 때 client output 디렉토리와
- * 캐시 manifest 파일을 통째로 삭제하기 위한 옵션 묶음.
+ * "깨끗한 상태로 재생성" 이 필요할 때 client output 디렉토리를 통째로
+ * 삭제하기 위한 옵션 묶음. (cache manifest 는 output 내부에 함께 있으므로 같이 삭제됨)
  *
- * ✨ 기본값 동작: dryRun=false, clientOutputDir 삭제 + manifest 파일 삭제
+ * ✨ 기본값 동작: dryRun=false, clientOutputDir 삭제
  *   (schema 파일 자체는 절대 건드리지 않음 — Precise Touch 원칙)
  */
 export interface CleanupOptions {
@@ -69,17 +69,17 @@ export interface CleanupOptions {
   /** OTS 가 속한 프로젝트 루트 (기본값 workspaceRoot) */
   projectRoot?: string;
   /**
+   * 삭제할 Prisma Client output 절대 경로.
+   * `PRISMA_CLIENT_OUTPUT` override 로 생성된 output 을 정확히 지우기 위해 사용.
+   * 미지정시 `${projectRoot}/generated/prisma/${otsName}` 로 resolve 한다.
+   */
+  clientOutputDir?: string;
+  /**
    * true 로 설정시 실제 fs.rm 을 실행하지 않고 삭제될 경로 리스트만 반환.
    * 파이프라인 시작 전 validation / 사용자에게 "이렇게 지워집니다" 미리 보여줄 때 사용.
    * @default false
    */
   dryRun?: boolean;
-  /**
-   * true 로 설정시 Prisma cache manifest 파일은 유지하고 generated client 만 삭제.
-   * (schema 파일은 옵션과 무관하게 항상 보존)
-   * @default false — 기본은 manifest 까지 함께 삭제
-   */
-  keepManifest?: boolean;
 }
 
 /**

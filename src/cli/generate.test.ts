@@ -1,6 +1,17 @@
 import type { mkdirSync } from 'node:fs';
 import { relative } from 'node:path';
 
+import {
+  afterEach,
+  beforeEach,
+  debugSnapshot,
+  describe,
+  expect,
+  test,
+  useSandbox,
+  vi,
+} from '@infra/testing';
+
 import * as cliUtils from './utils';
 import * as cacheMod from '../cache';
 import { generatePrismaClient } from './generate';
@@ -11,10 +22,9 @@ import type {
   PrismaOtsName,
   WithCacheParams,
 } from '../types';
-import { afterEach, beforeEach, debugSnapshot, describe, expect, test, useSandbox, vi } from '@infra/testing';
-
 
 describe.unit('cli/generate.ts — generatePrismaClient (UNIT, no real CLI)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Config OTS 리터럴 유니온은 satisfies 불가 → test-patterns.md §A-2 공식 예외 ①
   const OTS_NAME = 'main' as any as PrismaOtsName;
 
   let sb: ReturnType<typeof useSandbox>;
@@ -200,10 +210,9 @@ describe.unit('cli/generate.ts — generatePrismaClient (UNIT, no real CLI)', ()
     expect(params.prismaConfigPath).toBe(layout.prismaConfigPath);
     expect(params.clientOutputDir).toBe(layout.clientOutputDir);
     expect(params.useCache).toBe(true);
-    expect(params.projectRoot).toBe(opts.projectRoot);
     debugSnapshot({
       useCache: params.useCache,
-      projectRoot: relative(sb.root, params.projectRoot!),
+      clientOutputDir: relative(sb.root, params.clientOutputDir),
     });
   });
 
@@ -266,7 +275,7 @@ describe.unit('cli/generate.ts — generatePrismaClient (UNIT, no real CLI)', ()
       OTS_NAME: 'main',
       PRISMA_CLIENT_OUTPUT: 'out',
     };
-    buildEnvSpy.mockReturnValue(resolvedEnv as any);
+    buildEnvSpy.mockReturnValue(resolvedEnv);
 
     withCacheSpy.mockImplementation(
       async (_params: WithCacheParams, work: (ctx: WorkCtx) => Promise<GenerateResult>) => {
@@ -287,7 +296,10 @@ describe.unit('cli/generate.ts — generatePrismaClient (UNIT, no real CLI)', ()
     expect(cwd).toBe(opts.projectRoot);
     expect(env).toBe(resolvedEnv);
     expect(stdio).toBeUndefined();
-    debugSnapshot({ args, cwd: relative(sb.root, cwd as string) });
+    debugSnapshot({
+      args: [args[0], args[1], relative(sb.root, layout.prismaConfigPath)],
+      cwd: relative(sb.root, cwd as string),
+    });
   });
 
   test('GIVEN stdio=inherit WHEN cache miss THEN forwards stdio to runPrismaCli', async () => {
